@@ -44,3 +44,26 @@ rather than fails while projects are still being brought in; it is not yet a mer
 
 Q2 and Q3 cannot be verified by a script. They are enforced by the people and agents doing the
 work, and by GAJ refusing results that arrive without them.
+
+## Q4 — Data must not go quietly out of date
+
+Any project that publishes data declares, in `FRESHNESS.json`, how old each source may get
+before the figures stop being trustworthy. The compliance gate checks the actual data against
+those limits and **fails** when a source is past its limit.
+
+```json
+{
+  "sources": [
+    { "name": "USDA NASS acreage and production", "file": "assets/data/official-baseline.json", "max_age_days": 45 },
+    { "name": "NASA SMAP soil moisture",          "file": "assets/data/satellite-signals-2026.json", "max_age_days": 10 }
+  ]
+}
+```
+
+Why this rule exists: on 2026-09-14 every NebraskaBeans source was three days old and correct.
+Nothing was scheduled to refresh them, and nothing would have noticed. Left alone the site would
+have shown September figures in December, with the same confident presentation and no warning.
+Good sources going quietly stale is a worse failure than bad sources, because nothing looks wrong.
+
+A source that cannot be refreshed automatically still gets a limit. When it expires the build
+fails and a person decides — refresh it, or change the limit deliberately and record why.
