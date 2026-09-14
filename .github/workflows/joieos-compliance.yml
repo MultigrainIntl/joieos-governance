@@ -1,9 +1,10 @@
 name: JoieOS Compliance
 
-# This repository does not define its own rules. It inherits them.
-# The rules live in MultigrainIntl/joieos-governance and are edited there, once, for everyone.
+# The governance repository tests ITSELF against the rules in THIS commit, not against the
+# version published on main. Referencing main here created a trap: a change that fixes the
+# rules could never pass, because it was judged by the rules it was fixing.
 on: [push, pull_request, workflow_dispatch]
 
 jobs:
   compliance:
-    uses: MultigrainIntl/joieos-governance/.github/workflows/compliance.yml@main
+    uses: ./.github/workflows/compliance.yml
