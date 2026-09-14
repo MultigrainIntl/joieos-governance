@@ -4,8 +4,10 @@
 set -u
 
 OWNER=MultigrainIntl
-# Repositories whose live branch requires review: prepare a pull request, never self-merge.
-REVIEW=" vowvy-app sqfready-app gisit-weather gisit-crop-deploy oatgold-web inbox-intelligence nebraskabeans ai-project-operating-system joieos-governance "
+# EVERY repository is handled by pull request. No exceptions.
+# An earlier version wrote directly to default branches outside a static list, while the
+# documentation claimed it always used pull requests. The claim was false; this is the fix.
+# Nothing here writes to a default branch and nothing here merges.
 
 b64() { base64 -w0 2>/dev/null < "$1" || base64 < "$1" | tr -d '\n'; }
 
@@ -16,7 +18,6 @@ for r in $(gh repo list "$OWNER" --limit 200 --json name,isArchived \
   N=$((N+1))
   DEF=$(gh api "repos/$OWNER/$r" --jq .default_branch 2>/dev/null)
   [ -z "$DEF" ] && { FAILED="$FAILED $r(unreadable)"; continue; }
-  case "$REVIEW" in *" $r "*) MODE=review ;; *) MODE=direct ;; esac
   DID=""
 
   # --- branch protection: pure strengthening, applied everywhere ---
@@ -37,13 +38,9 @@ for r in $(gh repo list "$OWNER" --limit 200 --json name,isArchived \
     || NEEDS="$NEEDS gate"
 
   if [ -n "$NEEDS" ]; then
-    if [ "$MODE" = review ]; then
-      BR="joieos/conformance"
-      HEAD=$(gh api "repos/$OWNER/$r/git/ref/heads/$DEF" --jq .object.sha 2>/dev/null)
-      gh api "repos/$OWNER/$r/git/refs" -X POST -f ref="refs/heads/$BR" -f sha="$HEAD" >/dev/null 2>&1
-    else
-      BR="$DEF"
-    fi
+    BR="joieos/conformance"
+    HEAD=$(gh api "repos/$OWNER/$r/git/ref/heads/$DEF" --jq .object.sha 2>/dev/null)
+    gh api "repos/$OWNER/$r/git/refs" -X POST -f ref="refs/heads/$BR" -f sha="$HEAD" >/dev/null 2>&1
 
     case "$NEEDS" in
       *gov*)
@@ -67,10 +64,10 @@ for r in $(gh repo list "$OWNER" --limit 200 --json name,isArchived \
         ;;
     esac
 
-    if [ "$MODE" = review ] && [ -n "$DID" ]; then
+    if [ -n "$DID" ]; then
       URL=$(gh pr create --repo "$OWNER/$r" --base "$DEF" --head "$BR" \
               --title "JoieOS conformance" \
-              --body "Automatic conformance repair: governance file and compliance gate. No product code touched. Not merged — this job never approves its own work." 2>&1 | tail -1)
+              --body "Automatic conformance repair: governance file and compliance gate. No product code touched. Every change goes through a pull request; this job never writes to a default branch and never merges its own work." 2>&1 | tail -1)
       PREPARED="$PREPARED\n  $r —$DID — $URL"
       DID=""
     fi
