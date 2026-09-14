@@ -118,6 +118,42 @@ jobs:
             echo "Reported, not failed, while projects are still being brought in."
           fi
 
+      - name: Data freshness (Q4) — sources must not go quietly out of date
+        run: |
+          set -e
+          if [ ! -f FRESHNESS.json ]; then
+            echo "NOTE CONTROL-FRESH-001: no FRESHNESS.json."
+            echo "A project that publishes data must declare how old each source may get."
+            echo "Without it, stale figures keep being shown with full confidence."
+            exit 0
+          fi
+          python3 - <<'PYEOF'
+          import json, re, os, sys
+          from datetime import date, datetime
+          spec = json.load(open('FRESHNESS.json'))
+          today = date.today()
+          bad, ok = [], []
+          for s in spec.get('sources', []):
+              f, maxage = s['file'], int(s['max_age_days'])
+              if not os.path.exists(f):
+                  bad.append(f"{s['name']}: file missing ({f})"); continue
+              txt = open(f, 'rb').read().decode('utf-8', 'ignore')
+              ds = re.findall(r'20\d\d-\d\d-\d\d', txt)
+              if not ds:
+                  bad.append(f"{s['name']}: no date found in {f}"); continue
+              newest = max(ds)
+              age = (today - datetime.strptime(newest, '%Y-%m-%d').date()).days
+              line = f"{s['name']}: newest {newest}, {age}d old, limit {maxage}d"
+              (ok if age <= maxage else bad).append(line)
+          for l in ok:  print("OK  ", l)
+          for l in bad: print("FAIL", l)
+          if bad:
+              print()
+              print("FAIL CONTROL-FRESH-002: data is older than this project declared acceptable.")
+              print("Refresh the sources, or change the limit deliberately and say why.")
+              sys.exit(1)
+          PYEOF
+
       - name: Result
         run: |
           echo "JoieOS Compliance passed."
