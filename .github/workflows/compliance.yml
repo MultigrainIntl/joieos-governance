@@ -104,6 +104,20 @@ jobs:
             echo "--- npm test ---"; npm test --if-present
           else echo "SKIP  no test script"; fi
 
+      - name: Quality bar present (Q1)
+        run: |
+          set -e
+          if [ -f QUALITY.md ] || [ -f project-control/UX_CONTRACT.md ] \
+             || grep -rqi "quality bar\|acceptance criteria" --include=*.md . 2>/dev/null; then
+            echo "OK  a written quality bar is present"
+          else
+            echo "NOTE CONTROL-QUALITY-001: this project has no written quality bar."
+            echo "JoieOS Q1 requires a QUALITY.md stating, in GAJ's words, what a user must be"
+            echo "able to do, what must never happen, and what would make the result"
+            echo "unacceptable. Work cannot be judged good or bad without it."
+            echo "Reported, not failed, while projects are still being brought in."
+          fi
+
       - name: Result
         run: |
           echo "JoieOS Compliance passed."
