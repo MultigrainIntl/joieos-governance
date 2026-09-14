@@ -1,18 +1,24 @@
-name: JoieOS Conformance Scan
+name: JoieOS Conformance
 
-# Finds every MultigrainIntl repository — including ones created since the last run —
-# and reports which are not yet under JoieOS governance.
+# Brings every MultigrainIntl repository — existing and newly created — under the JoieOS
+# rules, and repairs any that have drifted out. Runs daily.
 #
-# Read-only. Changes nothing. Opens an issue here when something is out of conformance,
-# so a new repository cannot quietly sit outside the rules.
+# It does not write GAJ a to-do list. It repairs what it can and records what it did.
 #
-# REQUIRES a secret named JOIEOS_SCAN_TOKEN: a fine-grained personal access token with
-# read-only "Contents", "Metadata" and "Administration" access to all repositories.
-# Without it the scan sees only public repos and says so.
+# Repairs by itself (strengthening only, never weakening):
+#   missing branch protection  -> applies deletion + force-push blocking
+#   missing governance file    -> adds it
+#   missing compliance gate    -> adds it
+# For repositories whose live branch requires review it prepares a pull request and stops.
+# It never approves its own work.
+#
+# Requires a secret JOIEOS_SCAN_TOKEN: a fine-grained personal access token with read+write
+# Contents, Workflows, Administration and Pull requests on all repositories. Without it the
+# job halts loudly rather than reporting a false all-clear.
 
 on:
   schedule:
-    - cron: "0 14 * * 1"   # Mondays 14:00 UTC = 8:00am America/Denver
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 permissions:
@@ -20,52 +26,35 @@ permissions:
   issues: write
 
 jobs:
-  scan:
-    name: Conformance scan
+  conformance:
+    name: JoieOS Conformance
     runs-on: ubuntu-latest
     steps:
-      - name: Scan all repositories
-        id: scan
+      - uses: actions/checkout@v4
+
+      - name: Require the access key
         env:
-          GH_TOKEN: ${{ secrets.JOIEOS_SCAN_TOKEN || github.token }}
-          SCOPED: ${{ secrets.JOIEOS_SCAN_TOKEN != '' }}
+          T: ${{ secrets.JOIEOS_SCAN_TOKEN }}
         run: |
-          set -u
-          OWNER=MultigrainIntl
-          if [ "$SCOPED" != "true" ]; then
-            echo "WARNING: JOIEOS_SCAN_TOKEN not set — private repositories cannot be seen." | tee -a report.md
-            echo "" >> report.md
+          if [ -z "$T" ]; then
+            echo "HALTED: JOIEOS_SCAN_TOKEN is not set."
+            echo "Without it this job sees only public repositories and would report a false"
+            echo "all-clear across most of the estate. Refusing to run half blind."
+            exit 1
           fi
+          echo "OK  access key present"
 
-          REPOS=$(gh repo list "$OWNER" --limit 200 --json name,isArchived \
-                    --jq '.[] | select(.isArchived|not) | .name' 2>/dev/null | sort)
+      - name: Repair conformance across all repositories
+        id: run
+        env:
+          GH_TOKEN: ${{ secrets.JOIEOS_SCAN_TOKEN }}
+        run: bash templates/conformance.sh
 
-          echo "| Repository | Governance file | Compliance gate | Branch protection |" >> report.md
-          echo "|---|---|---|---|" >> report.md
-
-          BAD=0
-          for r in $REPOS; do
-            if gh api "repos/$OWNER/$r/contents/CLAUDE.md" -H "Accept: application/vnd.github.raw" 2>/dev/null | grep -qi joieos
-              then C="yes"; else C="**MISSING**"; fi
-            if gh api "repos/$OWNER/$r/contents/.github/workflows/joieos-compliance.yml" >/dev/null 2>&1
-              then G="yes"; else G="**MISSING**"; fi
-            N=$(gh api "repos/$OWNER/$r/rulesets" --jq 'length' 2>/dev/null || echo 0)
-            if [ "${N:-0}" -gt 0 ] 2>/dev/null; then P="yes"; else P="**MISSING**"; fi
-            echo "| $r | $C | $G | $P |" >> report.md
-            case "$C$G$P" in *MISSING*) BAD=$((BAD+1)) ;; esac
-          done
-
-          echo "" >> report.md
-          echo "$BAD repositories are not fully under JoieOS governance." >> report.md
-          echo "bad=$BAD" >> "$GITHUB_OUTPUT"
-          cat report.md
-
-      - name: Open an issue when something is out of conformance
-        if: steps.scan.outputs.bad != '0'
+      - name: Record what was done
+        if: steps.run.outputs.changed == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "JoieOS conformance: ${{ steps.scan.outputs.bad }} repositories outside governance" \
+          gh issue create --repo "${{ github.repository }}" \
+            --title "JoieOS conformance — $(date -u '+%Y-%m-%d')" \
             --body-file report.md
