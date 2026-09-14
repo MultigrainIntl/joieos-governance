@@ -1,0 +1,105 @@
+name: JoieOS Compliance (central)
+
+# THE single definition of JoieOS compliance for every MultigrainIntl repository.
+# Repos do not copy this. They call it. Editing this file changes the rules everywhere
+# at once — that is the whole point.
+#
+# Canonical protocol: MultigrainIntl/ai-project-operating-system
+#   joieos/JOIEOS.md           authority, execution, memory
+#   joieos/JOIEOS_PROTOCOL.md  philosophy
+
+on:
+  workflow_call:
+    inputs:
+      skip_build:
+        description: "Skip the build/test step for repos with no runnable project"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  compliance:
+    name: JoieOS Compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Governance file present and linked
+        run: |
+          set -e
+          FOUND=0
+          for f in CLAUDE.md AGENTS.md .claude/CLAUDE.md; do
+            if [ -f "$f" ] && grep -qi "joieos" "$f"; then
+              echo "OK  $f references JoieOS governance"; FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "FAIL CONTROL-INHERIT-001: no CLAUDE.md or AGENTS.md referencing JoieOS."
+            echo "Every project must inherit the protocol before work is trusted."
+            exit 1
+          fi
+
+      - name: No server-side secrets
+        run: |
+          set -e
+          EX="--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=dist
+              --exclude-dir=build --exclude-dir=.next --exclude-dir=vendor
+              --exclude=*.lock --exclude=package-lock.json"
+          SECRET='(sk-[A-Za-z0-9]{32,}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|"private_key_id"|service_account)'
+          HITS=$(grep -rIEl "$SECRET" . $EX 2>/dev/null || true)
+          if [ -n "$HITS" ]; then
+            echo "FAIL CONTROL-SECRET-001: server-side credential committed in:"
+            echo "$HITS"
+            echo "Rotate the credential first, then remove it from the repository and its history."
+            exit 1
+          fi
+          echo "OK  no server-side credentials"
+          CLIENT=$(grep -rIEl 'AIza[0-9A-Za-z_-]{35}' . $EX 2>/dev/null || true)
+          if [ -n "$CLIENT" ]; then
+            echo "NOTE CONTROL-SECRET-002: client-side API key present in:"
+            echo "$CLIENT"
+            echo "Expected for Firebase/Maps web config — these ship in the browser and are not"
+            echo "secret. Security depends on provider-side restrictions, not on hiding them."
+          fi
+
+      - name: No unattributed verification claims
+        run: |
+          set -e
+          BAD=""
+          for f in $(grep -rIl --include='*.md' --include='*.yaml' --include='*.yml' \
+                       -E '\bINDEPENDENTLY_VERIFIED\b' . \
+                       --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null || true); do
+            if ! grep -qiE 'verifier|verified_by|independent_verification_record|identity_provenance' "$f"; then
+              BAD="$BAD $f"
+            fi
+          done
+          if [ -n "$BAD" ]; then
+            echo "FAIL CONTROL-VERIFY-001: INDEPENDENTLY_VERIFIED asserted with no verifier named in:"
+            for f in $BAD; do echo "  $f"; done
+            echo 'Same-actor testing is IMPLEMENTATION_TESTED, never VERIFIED.'
+            exit 1
+          fi
+          echo "OK  no unattributed verification claims"
+
+      - name: Build and tests, when defined
+        if: ${{ !inputs.skip_build }}
+        run: |
+          set -e
+          if [ ! -f package.json ]; then echo "SKIP  no package.json"; exit 0; fi
+          if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          if node -e "process.exit(require('./package.json').scripts?.build?0:1)" 2>/dev/null; then
+            echo "--- npm run build ---"; npm run build --if-present
+          else echo "SKIP  no build script"; fi
+          if node -e "process.exit(require('./package.json').scripts?.test?0:1)" 2>/dev/null; then
+            echo "--- npm test ---"; npm test --if-present
+          else echo "SKIP  no test script"; fi
+
+      - name: Result
+        run: |
+          echo "JoieOS Compliance passed."
+          echo "This proves the checks above only — not that the product works."
