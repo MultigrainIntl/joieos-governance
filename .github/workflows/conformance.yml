@@ -3,22 +3,22 @@ name: JoieOS Conformance
 # Brings every MultigrainIntl repository — existing and newly created — under the JoieOS
 # rules, and repairs any that have drifted out. Runs daily.
 #
-# It does not write GAJ a to-do list. It fixes what it can and reports what it did.
+# It does not write GAJ a to-do list. It repairs what it can and records what it did.
 #
-# WHAT IT REPAIRS BY ITSELF (all strengthening only, never weakening):
-#   - missing governance file            -> adds it
-#   - missing compliance gate            -> adds it
-#   - missing branch protection          -> applies deletion + force-push blocking
-# WHERE A REPOSITORY REQUIRES REVIEW (production), it prepares the change as a pull request
-# and stops. It never approves its own work.
+# Repairs by itself (strengthening only, never weakening):
+#   missing branch protection  -> applies deletion + force-push blocking
+#   missing governance file    -> adds it
+#   missing compliance gate    -> adds it
+# For repositories whose live branch requires review it prepares a pull request and stops.
+# It never approves its own work.
 #
-# REQUIRES a secret named JOIEOS_SCAN_TOKEN — a fine-grained personal access token with
-# read+write "Contents", "Workflows", "Administration" and "Pull requests" on all repositories.
-# Without it the job halts loudly instead of reporting a false all-clear.
+# Requires a secret JOIEOS_SCAN_TOKEN: a fine-grained personal access token with read+write
+# Contents, Workflows, Administration and Pull requests on all repositories. Without it the
+# job halts loudly rather than reporting a false all-clear.
 
 on:
   schedule:
-    - cron: "0 14 * * *"   # daily, 14:00 UTC = 8:00am America/Denver
+    - cron: "0 14 * * *"
   workflow_dispatch:
 
 permissions:
@@ -30,123 +30,25 @@ jobs:
     name: JoieOS Conformance
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Require the access key
         env:
           T: ${{ secrets.JOIEOS_SCAN_TOKEN }}
         run: |
           if [ -z "$T" ]; then
             echo "HALTED: JOIEOS_SCAN_TOKEN is not set."
-            echo "Without it this job can only see public repositories, and would report a"
-            echo "false all-clear across most of the estate. Refusing to run half blind."
+            echo "Without it this job sees only public repositories and would report a false"
+            echo "all-clear across most of the estate. Refusing to run half blind."
             exit 1
           fi
           echo "OK  access key present"
 
-      - name: Bring every repository under the rules
+      - name: Repair conformance across all repositories
+        id: run
         env:
           GH_TOKEN: ${{ secrets.JOIEOS_SCAN_TOKEN }}
-        run: |
-          set -u
-          OWNER=MultigrainIntl
-          # Repositories whose live branch requires review: prepare a PR, never self-merge.
-          REVIEW=" vowvy-app sqfready-app gisit-weather gisit-crop-deploy oatgold-web inbox-intelligence nebraskabeans ai-project-operating-system joieos-governance "
-
-          GOVFILE=$(cat <<'MD'
-          > **JoieOS governance applies to this project.**
-          > Canonical source: `MultigrainIntl/ai-project-operating-system` — `joieos/JOIEOS.md`
-          > (authority, execution, memory) and `joieos/JOIEOS_PROTOCOL.md` (philosophy).
-          >
-          > Loop: **Observe → Report → Approve → Patch → Verify → Stop.** One gate at a time.
-          > Nothing deployed, pushed to a live branch, merged, or deleted without GAJ's explicit
-          > approval. "Built" is not "working"; missing proof means Incomplete, Blocked or Failed
-          > — never "ready". Same-actor testing is IMPLEMENTATION_TESTED, never VERIFIED.
-          >
-          > Project rules may narrow this protocol. They may never weaken its proof, approval,
-          > safety, privacy, or deployment protections.
-          MD
-          )
-
-          GATE='name: JoieOS Compliance
-          on: [push, pull_request, workflow_dispatch]
-          jobs:
-            compliance:
-              uses: MultigrainIntl/joieos-governance/.github/workflows/compliance.yml@main
-          '
-
-          FIXED=""; PREPARED=""; FAILED=""; OK=0; N=0
-
-          for r in $(gh repo list "$OWNER" --limit 200 --json name,isArchived \
-                       --jq '.[] | select(.isArchived|not) | .name' | sort); do
-            N=$((N+1))
-            DEF=$(gh api "repos/$OWNER/$r" --jq .default_branch)
-            case "$REVIEW" in *" $r "*) MODE=review ;; *) MODE=direct ;; esac
-            DID=""
-
-            # --- protection: pure strengthening, applied directly even on review repos ---
-            if [ "$(gh api "repos/$OWNER/$r/rulesets" --jq 'length' 2>/dev/null || echo 0)" = "0" ]; then
-              if gh api "repos/$OWNER/$r/rulesets" -X POST --input - >/dev/null 2>&1 <<'RS'
-          {"name":"JoieOS protection","target":"branch","enforcement":"active",
-           "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/gh-pages"],"exclude":[]}},
-           "rules":[{"type":"deletion"},{"type":"non_fast_forward"}]}
-          RS
-              then DID="$DID protection"; else FAILED="$FAILED $r(protection)"; fi
-            fi
-
-            # --- governance file and gate ---
-            NEEDS=""
-            gh api "repos/$OWNER/$r/contents/CLAUDE.md" -H "Accept: application/vnd.github.raw" 2>/dev/null \
-              | grep -qi joieos || NEEDS="$NEEDS gov"
-            gh api "repos/$OWNER/$r/contents/.github/workflows/joieos-compliance.yml" >/dev/null 2>&1 \
-              || NEEDS="$NEEDS gate"
-
-            if [ -n "$NEEDS" ]; then
-              if [ "$MODE" = review ]; then
-                BR="joieos/conformance"
-                HEAD=$(gh api "repos/$OWNER/$r/git/ref/heads/$DEF" --jq .object.sha)
-                gh api "repos/$OWNER/$r/git/refs" -X POST -f ref="refs/heads/$BR" -f sha="$HEAD" >/dev/null 2>&1
-              else
-                BR="$DEF"
-              fi
-
-              case "$NEEDS" in *gov*)
-                SHA=$(gh api "repos/$OWNER/$r/contents/CLAUDE.md?ref=$BR" --jq .sha 2>/dev/null)
-                BODY=$(printf '# %s — Claude Code standing rules\n\n%s\n' "$r" "$GOVFILE")
-                ARGS=$(jq -nc --arg m "JoieOS: inherit governance" --arg c "$(printf '%s' "$BODY" | base64 -w0 2>/dev/null || printf '%s' "$BODY" | base64)" --arg b "$BR" --arg s "${SHA:-}" \
-                        'if $s=="" or $s=="null" then {message:$m,content:$c,branch:$b} else {message:$m,content:$c,branch:$b,sha:$s} end')
-                printf '%s' "$ARGS" | gh api "repos/$OWNER/$r/contents/CLAUDE.md" -X PUT --input - >/dev/null 2>&1 \
-                  && DID="$DID governance-file" || FAILED="$FAILED $r(gov)"
-              ;; esac
-
-              case "$NEEDS" in *gate*)
-                ARGS=$(jq -nc --arg m "JoieOS: add compliance gate" --arg c "$(printf '%s' "$GATE" | base64 -w0 2>/dev/null || printf '%s' "$GATE" | base64)" --arg b "$BR" '{message:$m,content:$c,branch:$b}')
-                printf '%s' "$ARGS" | gh api "repos/$OWNER/$r/contents/.github/workflows/joieos-compliance.yml" -X PUT --input - >/dev/null 2>&1 \
-                  && DID="$DID compliance-gate" || FAILED="$FAILED $r(gate)"
-              ;; esac
-
-              if [ "$MODE" = review ] && [ -n "$DID" ]; then
-                URL=$(gh pr create --repo "$OWNER/$r" --base "$DEF" --head "$BR" \
-                       --title "JoieOS conformance" \
-                       --body "Automatic conformance repair. Adds the governance file and compliance gate. No product code touched. Requires review — this job does not merge its own work." 2>&1 | tail -1)
-                PREPARED="$PREPARED\n  $r —$DID — $URL"
-                DID=""
-              fi
-            fi
-
-            if [ -n "$DID" ]; then FIXED="$FIXED\n  $r —$DID"; else OK=$((OK+1)); fi
-          done
-
-          {
-            echo "# JoieOS conformance — $(date -u '+%Y-%m-%d %H:%M UTC')"
-            echo
-            echo "$N repositories checked. $OK already conformant."
-            if [ -n "$FIXED" ]; then echo; echo "## Repaired automatically"; printf "$FIXED\n"; fi
-            if [ -n "$PREPARED" ]; then echo; echo "## Prepared for your review (not merged — this job never approves its own work)"; printf "$PREPARED\n"; fi
-            if [ -n "$FAILED" ]; then echo; echo "## Could not repair"; echo "$FAILED"; fi
-          } > report.md
-          cat report.md
-
-          if [ -n "$FIXED$PREPARED$FAILED" ]; then echo "changed=yes" >> "$GITHUB_OUTPUT"; else echo "changed=no" >> "$GITHUB_OUTPUT"; fi
-        id: run
+        run: bash templates/conformance.sh
 
       - name: Record what was done
         if: steps.run.outputs.changed == 'yes'
